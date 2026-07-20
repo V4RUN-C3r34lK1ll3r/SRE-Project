@@ -43,13 +43,13 @@ resource "azurerm_user_assigned_identity" "container_app" {
 # secrets, one for the Terraform caller to *write* them.
 
 resource "azurerm_key_vault" "this" {
-  name                        = "kv-${substr(replace(var.project_name, "-", ""), 0, 10)}${substr(var.environment, 0, 3)}"
-  resource_group_name         = azurerm_resource_group.this.name
-  location                    = azurerm_resource_group.this.location
-  tenant_id                   = data.azurerm_client_config.current.tenant_id
-  sku_name                    = "standard"
-  enable_rbac_authorization   = true
-  purge_protection_enabled    = false # true in a real environment; false here so the exercise vault is easy to tear down
+  name                       = "kv-${substr(replace(var.project_name, "-", ""), 0, 10)}${substr(var.environment, 0, 3)}"
+  resource_group_name        = azurerm_resource_group.this.name
+  location                   = azurerm_resource_group.this.location
+  tenant_id                  = data.azurerm_client_config.current.tenant_id
+  sku_name                   = "standard"
+  rbac_authorization_enabled = true
+  purge_protection_enabled   = false # true in a real environment; false here so the exercise vault is easy to tear down
   soft_delete_retention_days = 7
 }
 
