@@ -30,3 +30,6 @@ terraform.rc
 
 # Ignore lock file variance across platforms (optional; comment out to commit it)
 # .terraform.lock.hcl
+
+# Personal interview prep notes -- not part of the take-home submission
+docs/primary.md
