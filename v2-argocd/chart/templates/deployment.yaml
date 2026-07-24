@@ -1,0 +1,53 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    app: {{ .Release.Name }}
+spec:
+  replicas: {{ .Values.replicaCount }}
+  selector:
+    matchLabels:
+      app: {{ .Release.Name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .Release.Name }}
+    spec:
+      # Two containers in one pod -- the same shape as v1's container
+      # app (web + sidecar), just expressed as a Kubernetes pod spec
+      # instead of an azurerm_container_app template block.
+      containers:
+        - name: web
+          image: {{ .Values.image }}
+          ports:
+            - containerPort: 80
+          env:
+            - name: APP_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: APP_SECRET
+          volumeMounts:
+            - name: secrets-store
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
+        - name: sidecar
+          image: {{ .Values.image }}
+          env:
+            - name: SIDECAR_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: SIDECAR_SECRET
+          volumeMounts:
+            - name: secrets-store
+              mountPath: "/mnt/secrets-store"
+              readOnly: true
+      volumes:
+        - name: secrets-store
+          csi:
+            driver: secrets-store.csi.k8s.io
+            readOnly: true
+            volumeAttributes:
+              secretProviderClass: {{ .Release.Name }}-kv

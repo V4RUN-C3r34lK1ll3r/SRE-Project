@@ -1,0 +1,13 @@
+replicaCount: 1
+
+image: nginx:latest
+
+keyVault:
+  name: kv-sretakehomarg
+  tenantId: aef7b0b3-a142-4378-9c05-d52f96f8f5b5
+  # Client ID of the AKS Key Vault Secrets Provider addon's managed identity.
+  # Comes from `terraform output key_vault_secrets_provider_client_id` in
+  # v2-argocd/ -- set here (or via the ArgoCD Application's helm values
+  # override) after the cluster exists, since the identity doesn't exist
+  # until AKS creates it.
+  userAssignedIdentityID: ""

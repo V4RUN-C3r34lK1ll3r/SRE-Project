@@ -1,0 +1,11 @@
+location     = "eastus"
+project_name = "sre-takehome"
+environment  = "argocd"
+node_vm_size = "Standard_B2s"
+
+# Do not put real values here or in any committed .tfvars file.
+# Set these via environment variables instead, e.g.:
+#   export TF_VAR_secret_one_value="whatever"
+#   export TF_VAR_secret_two_value="whatever"
+secret_one_value = "replace-me"
+secret_two_value = "replace-me"

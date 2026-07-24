@@ -1,0 +1,26 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sre-takehome-app
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: https://github.com/V4RUN-C3r34lK1ll3r/SRE-Project.git
+    targetRevision: main
+    path: v2-argocd/chart
+    helm:
+      parameters:
+        # Filled in from `terraform output key_vault_secrets_provider_client_id`
+        # after the cluster exists -- see README.md.
+        - name: keyVault.userAssignedIdentityID
+          value: REPLACE_WITH_TERRAFORM_OUTPUT
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: default
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true

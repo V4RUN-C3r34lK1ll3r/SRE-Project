@@ -1,0 +1,14 @@
+location     = "eastus"
+project_name = "sre-takehome"
+environment  = "hcf"
+
+# For local execution mode, set these via env vars instead of a committed
+# .tfvars file, same as v1:
+#   export TF_VAR_secret_one_value="whatever"
+#   export TF_VAR_secret_two_value="whatever"
+#
+# For remote execution mode, set them as *sensitive* variables directly on
+# the HCP Terraform workspace instead -- a committed .tfvars never reaches
+# a remote run's variable set automatically.
+secret_one_value = "replace-me"
+secret_two_value = "replace-me"
