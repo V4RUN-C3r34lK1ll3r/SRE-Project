@@ -1,65 +1,36 @@
-# SRE Take-Home: Azure Container App
+# SRE Take-Home — Three Versions
 
-Terraform that provisions an Azure Container App running two containers (public
-`nginx` images as placeholders), backed by Key Vault-managed secrets.
+Same brief — an Azure-hosted app running two containers with one or two
+secrets associated with it — built three different ways to have a real
+comparison ready for the interview discussion, not just a hypothetical one.
 
-## What this builds
+| | Compute | Delivery | State backend | Resource suffix |
+|---|---|---|---|---|
+| [v1-container-apps/](v1-container-apps/) | Azure Container Apps | `terraform apply` directly | Local | `-dev` |
+| [v2-argocd/](v2-argocd/) | AKS | Helm chart synced by ArgoCD (GitOps) | Local | `-argocd` |
+| [v3-tfc/](v3-tfc/) | Azure Container Apps | `terraform apply` | HCP Terraform (remote) | `-hcf` |
 
-- Resource group
-- Log Analytics workspace + Container Apps environment (log sink for the
-  environment's built-in log streaming)
-- User-assigned managed identity for the container app
-- Key Vault (RBAC-authorized) with two secrets
-  - one role assignment lets the Terraform caller write secrets
-  - one role assignment lets the container app's identity read secrets
-- Container App with two containers, each pulling one secret in as an
-  environment variable via a Key Vault-backed `secret` block
+## Why three
 
-## Why Key Vault instead of native container app secrets
+- **v1** is the literal ask: Container Apps, two containers, Key Vault-backed
+  secrets, `terraform init`/`validate` passing.
+- **v2** answers "what would this look like on the stack your platform team
+  actually runs" — AKS instead of a serverless container platform, secrets
+  synced from Key Vault into Kubernetes natively, and delivery handled by
+  ArgoCD reconciling a Helm chart instead of a direct `terraform apply`.
+- **v3** answers "what changes if this needs to be run by a team, not a
+  single laptop" — same infrastructure as v1, but state lives in HCP
+  Terraform (remote, locked, versioned) instead of a local `.tfstate` file.
 
-A native `secret { value = ... }` block on the container app is simpler, but
-the value sits in Terraform state in plaintext with no rotation story. Using
-`azurerm_key_vault_secret` + `key_vault_secret_id` on the container app means
-state only ever holds a reference, and access is controlled by ordinary RBAC
-role assignments through the identity already attached to the app.
+Each version is self-contained — its own `terraform init`/`validate`/`plan`
+inside its own folder, its own README with the reasoning for that version
+specifically. None of them share state with each other.
 
-One quirk worth knowing: once a `secret` block references
-`key_vault_secret_id`, Terraform can't diff the underlying value (it lives in
-Key Vault, not state), so without `lifecycle { ignore_changes = [secret] }`
-on the container app resource, every `plan` shows a spurious pending change.
-That's handled in [main.tf](main.tf).
+## Common ground across all three
 
-## Usage
-
-```bash
-cp terraform.tfvars.example terraform.tfvars   # then edit, or use TF_VAR_* env vars
-terraform init
-terraform validate
-terraform plan
-```
-
-Secrets are marked `sensitive` and have no default — set them via
-`TF_VAR_secret_one_value` / `TF_VAR_secret_two_value` or a gitignored
-`.tfvars` file. Never commit real values.
-
-## Cost notes
-
-Container Apps consumption plan and Log Analytics both have an always-free
-monthly grant that easily covers a short-lived test of this stack. Key Vault
-has no free tier but bills per-operation (fractions of a cent for a test
-run). Managed identities and role assignments are free.
-
-## Stretch topics (not built here, for discussion)
-
-**Observability**: Container Apps' built-in log streaming for a quick tail;
-a `diagnostic_setting` on the environment routing logs to the Log Analytics
-workspace already provisioned here; Azure Monitor metric alerts on
-CPU/memory/replica count; Application Insights if request-level tracing is
-needed.
-
-**Connectivity to a Redis cache**: VNet-integrate the Container Apps
-environment, deploy `azurerm_redis_cache` inside that VNet, expose it via a
-private endpoint + private DNS zone so the app never resolves a public
-address, and surface the connection string as a Key Vault secret using the
-same identity/role-assignment pattern already in place for the two secrets
-above.
+- Secrets are never hardcoded and never sit in plaintext in Terraform state —
+  Key Vault (v1/v3) or Key Vault synced into a native Kubernetes Secret (v2).
+- Every version passes `terraform init` + `terraform validate` at minimum;
+  each was also applied live and torn down afterward with `terraform
+  destroy` to avoid ongoing cost — see each subfolder's README for what "live"
+  actually looked like.
