@@ -73,14 +73,36 @@ $(terraform output -raw get_credentials_command)
 helm repo add argo https://argoproj.github.io/argo-helm
 helm install argocd argo/argo-cd --namespace argocd --create-namespace
 
-# wire the addon identity into the chart, then apply the Application
+# wire the addon identity and Key Vault name into the chart, then apply the Application
 CLIENT_ID=$(terraform output -raw key_vault_secrets_provider_client_id)
-sed "s/REPLACE_WITH_TERRAFORM_OUTPUT/$CLIENT_ID/" argocd-application.yaml | kubectl apply -f -
+KV_NAME=$(terraform output -raw key_vault_name)
+sed -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_CLIENT_ID/$CLIENT_ID/" \
+    -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_KV_NAME/$KV_NAME/" \
+    argocd-application.yaml | kubectl apply -f -
 ```
 
 From there ArgoCD takes over: it syncs `chart/` from this repo, and any
 future change to the chart on `main` gets reconciled automatically
 (`prune: true`, `selfHeal: true`).
+
+## Known gotchas
+
+- **Containers sharing a network namespace**: a pod's containers share
+  networking, same as containers in a single Container App revision (v1).
+  Both containers defaulting to `nginx:latest` would both try to bind `:80`
+  and one would crash-loop -- the `sidecar` container in
+  [chart/templates/deployment.yaml](chart/templates/deployment.yaml)
+  overrides its command to `["sleep", "infinity"]` to avoid this.
+- **Key Vault name collisions**: vault names are globally unique across
+  every Azure tenant. The name includes a random 4-character suffix
+  (`random_string.kv_suffix`), which also means it **can't be hardcoded**
+  in `chart/values.yaml` -- it has to flow from `terraform output
+  key_vault_name` into the ArgoCD `Application`'s helm values, same as the
+  addon's client ID already does.
+- **RBAC propagation delay**: same risk as v1 -- a fresh `apply` can
+  occasionally 403 on the first secret write even with `depends_on`
+  ordering the API calls correctly, since the role assignment itself can
+  take a minute or two to propagate. A second `apply` fixes it.
 
 ## Cost notes
 

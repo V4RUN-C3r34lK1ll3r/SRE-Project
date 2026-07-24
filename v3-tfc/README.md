@@ -1,10 +1,11 @@
 # v3 — Same Infra, HCP Terraform (Remote State)
 
 Identical infrastructure to [v1-container-apps/](../v1-container-apps/) --
-`main.tf` and `outputs.tf` here are byte-for-byte copies. The only thing that
-changes is **where state lives**: a local `.tfstate` file (v1) vs. HCP
-Terraform's managed backend (this version), with resources suffixed
-`-hcf` instead of `-dev` to keep them distinguishable side by side.
+`main.tf` here is a byte-for-byte copy. The only thing that changes is
+**where state lives and how `apply` runs**: a local `.tfstate` file plus a
+local `terraform apply` (v1) vs. HCP Terraform's managed backend with
+**remote execution** (this version), with resources suffixed `-hcf` instead
+of `-dev` to keep them distinguishable side by side.
 
 ## Why this exists
 
@@ -19,60 +20,59 @@ with no audit trail. This version answers "what changes for a team."
 ```hcl
 terraform {
   cloud {
-    organization = "<your org>"
+    organization = "varunzackv"
     workspaces {
-      name = "sre-takehome-hcf"
+      name = "SRE-Project"
     }
   }
-  # ...same required_providers block as v1
+  # ...same required_providers block as v1, plus hashicorp/random
 }
 ```
 
 That's it on the Terraform side. Everything in `main.tf` is unchanged.
 
-## Execution mode: local, deliberately
+## Execution mode: remote, chosen deliberately
 
 HCP Terraform workspaces run in one of two modes:
 
-- **Remote** -- `plan`/`apply` execute on HCP Terraform's own runners, not
-  your machine. This is the "real" team setup, but it means the runner has
-  no `az login` session -- it needs its own Azure credentials, which means
-  creating a **service principal** (an App Registration + client secret)
-  and storing it as sensitive workspace variables (`ARM_CLIENT_ID`,
-  `ARM_CLIENT_SECRET`, `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID`). That's a real
-  credential with subscription-level access, worth a deliberate decision
-  before creating it, not something to spin up automatically for a demo.
-- **Local** -- HCP Terraform stores and locks **state only**; `plan`/`apply`
-  still run on your machine using the same `az` CLI session as v1. This
-  already delivers the actual team-collaboration story (shared, locked,
-  versioned state) without provisioning a new Azure credential just to
-  prove the point.
+- **Remote** (used here) -- `plan`/`apply` execute on HCP Terraform's own
+  runners, approved in the web UI. The runner has no `az login` session, so
+  it needs its own Azure credential -- a **service principal**
+  (`sp-sre-takehome-tfc`), granted Contributor plus User Access
+  Administrator (scoped by an Azure Condition to exclude Owner/UAA/RBAC-admin
+  roles), with `ARM_CLIENT_ID` / `ARM_CLIENT_SECRET` / `ARM_TENANT_ID` /
+  `ARM_SUBSCRIPTION_ID` stored as workspace variables. This is the fuller,
+  more authentic HCP Terraform story -- run history, UI-driven approval, a
+  workspace a whole team could use.
+- **Local** -- HCP Terraform stores and locks *state only*; `plan`/`apply`
+  still run on your own machine with your existing `az` session. Simpler,
+  no service principal needed, and still delivers the core "shared, locked,
+  versioned state" story -- a legitimate lighter-weight choice if remote
+  execution's extra setup isn't worth it for a given team.
 
-**This version uses local execution mode.** Set it on the workspace after
-creation: **Workspace → Settings → General → Execution Mode → Local.**
-If asked in the interview "would you use remote execution in practice" --
-yes, for a real team, alongside a service principal or (better) OIDC
-federation so there's no long-lived secret at all; local mode here is a
-deliberate scope decision for a demo, not a limitation of HCP Terraform.
+Workspace created via the **Version Control Workflow** (linked directly to
+this GitHub repo), which is why it's named `SRE-Project` rather than the
+`sre-takehome-hcf` name a CLI-driven workspace would have used -- the code
+was updated to match what was actually created rather than force a rename.
+**Terraform Working Directory** is set to `v3-tfc` on the workspace (Settings
+→ General), since this repo has three separate configs in three subfolders.
 
 ## Setup
 
 1. Sign up at [app.terraform.io](https://app.terraform.io), create an
-   organization.
-2. Put that organization name into `organization = "..."` in `versions.tf`.
-3. `terraform login` -- opens a browser, generates a CLI token, stores it
-   locally (never commit it).
-4. `terraform init` -- this creates the `sre-takehome-hcf` workspace in your
-   org automatically on first run.
-5. In the HCP Terraform UI, set that workspace's **Execution Mode to
-   Local** (see above).
-6. Same as v1 from here:
-   ```bash
-   export TF_VAR_secret_one_value="demo-api-key-12345"
-   export TF_VAR_secret_two_value="demo-shared-token-67890"
-   terraform plan
-   terraform apply
-   ```
+   organization, create a workspace linked to this repo.
+2. Set the workspace's **Terraform Working Directory** to `v3-tfc`.
+3. Set **Execution Mode** to **Remote**.
+4. Create a service principal and grant it Contributor + User Access
+   Administrator on the subscription (the latter needs an Azure Condition
+   excluding Owner/UAA/RBAC-admin roles -- Azure requires this for any
+   User Access Administrator grant).
+5. Add workspace variables: `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`
+   (sensitive), `ARM_TENANT_ID`, `ARM_SUBSCRIPTION_ID` as environment
+   variables; `secret_one_value`, `secret_two_value` as sensitive Terraform
+   variables.
+6. Push to `main` (or click **New run** in the UI) to trigger a plan, then
+   **Confirm & Apply**.
 
 ## How this compares to v1
 
@@ -83,3 +83,17 @@ deliberate scope decision for a demo, not a limitation of HCP Terraform.
 | Secrets in state | None (Key Vault-backed, same as here) -- but if they ever were, a local file is worse than a managed backend either way | Same secret handling, safer backend |
 | Collaboration | Whoever has the laptop | Any team member with workspace access |
 | Audit trail | None | Full run history, who applied what and when |
+
+## Known gotchas
+
+Same as [v1](../v1-container-apps/README.md#known-gotchas) -- byte-identical
+`main.tf` means the same RBAC propagation delay, the same container
+network-namespace port collision (fixed with a `command` override on the
+sidecar), and the same Key Vault global-uniqueness handling (a random
+4-character suffix) all apply here too.
+
+Specific to this version: **granting User Access Administrator via CLI is
+the kind of action that should get flagged**, not run silently -- it's a
+role that can grant any permission to anyone on its scope. It was granted
+manually in the Azure Portal instead, which is also why Azure requires an
+extra Conditions step for that specific role.

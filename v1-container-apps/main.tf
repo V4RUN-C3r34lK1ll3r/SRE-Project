@@ -42,8 +42,17 @@ resource "azurerm_user_assigned_identity" "container_app" {
 # ordinary role assignments -- one for the app's identity to *read*
 # secrets, one for the Terraform caller to *write* them.
 
+# Key Vault names are globally unique across every Azure tenant, not just
+# this subscription -- a plain project+env name works until it collides
+# with someone else's vault. This suffix is the standard, cheap guard.
+resource "random_string" "kv_suffix" {
+  length  = 4
+  special = false
+  upper   = false
+}
+
 resource "azurerm_key_vault" "this" {
-  name                       = "kv-${substr(replace(var.project_name, "-", ""), 0, 10)}${substr(var.environment, 0, 3)}"
+  name                       = "kv-${substr(replace(var.project_name, "-", ""), 0, 10)}${substr(var.environment, 0, 3)}${random_string.kv_suffix.result}"
   resource_group_name        = azurerm_resource_group.this.name
   location                   = azurerm_resource_group.this.location
   tenant_id                  = data.azurerm_client_config.current.tenant_id
@@ -128,6 +137,12 @@ resource "azurerm_container_app" "this" {
       image  = "nginx:latest"
       cpu    = 0.25
       memory = "0.5Gi"
+      # Containers in the same Container App revision share a network
+      # namespace, same as pods in Kubernetes. Both containers defaulting
+      # to nginx would both try to bind 0.0.0.0:80 and crash-loop -- this
+      # command override keeps the sidecar as a placeholder second
+      # container without it fighting the "web" container for the port.
+      command = ["sleep", "infinity"]
 
       env {
         name        = "SIDECAR_SECRET"

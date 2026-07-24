@@ -31,6 +31,27 @@ Key Vault, not state), so without `lifecycle { ignore_changes = [secret] }`
 on the container app resource, every `plan` shows a spurious pending change.
 That's handled in [main.tf](main.tf).
 
+## Known gotchas
+
+- **RBAC propagation delay**: the Key Vault secrets `depends_on` the
+  "Secrets Officer" role assignment, so the *ordering* is correct, but Azure
+  RBAC grants can take up to a minute or two to actually propagate. A fresh
+  `apply` can occasionally 403 on the first secret write even though the
+  role assignment API call already succeeded -- a second `apply` right after
+  fixes it, since Terraform just resumes from where it left off.
+- **Both containers sharing a network namespace**: containers in the same
+  Container App revision share networking, the same model as pods in
+  Kubernetes. Two containers both defaulting to `nginx:latest` would both
+  try to bind `0.0.0.0:80` and one would crash-loop. The `sidecar` container
+  overrides its command to `["sleep", "infinity"]` specifically to avoid
+  this -- it's a placeholder second container, not meant to actually serve
+  traffic.
+- **Key Vault name collisions**: vault names are globally unique across
+  *every* Azure tenant, not just this subscription. The name includes a
+  random 4-character suffix (`random_string.kv_suffix`) so re-running this
+  against the same defaults never collides with a prior run or anyone
+  else's vault.
+
 ## Usage
 
 ```bash

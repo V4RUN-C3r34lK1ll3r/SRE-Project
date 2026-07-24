@@ -8,7 +8,7 @@ comparison ready for the interview discussion, not just a hypothetical one.
 |---|---|---|---|---|
 | [v1-container-apps/](v1-container-apps/) | Azure Container Apps | `terraform apply` directly | Local | `-dev` |
 | [v2-argocd/](v2-argocd/) | AKS | Helm chart synced by ArgoCD (GitOps) | Local | `-argocd` |
-| [v3-tfc/](v3-tfc/) | Azure Container Apps | `terraform apply` | HCP Terraform (remote state, local execution) | `-hcf` |
+| [v3-tfc/](v3-tfc/) | Azure Container Apps | `terraform apply`, approved in the HCP Terraform UI | HCP Terraform (remote state, remote execution) | `-hcf` |
 
 ## Why three
 
@@ -34,3 +34,9 @@ specifically. None of them share state with each other.
   each was also applied live and torn down afterward with `terraform
   destroy` to avoid ongoing cost — see each subfolder's README for what "live"
   actually looked like.
+- All three share the same fixes for the same underlying gotchas: a
+  `random_string` suffix on the Key Vault name (globally unique across
+  Azure, not just this subscription), and a `command` override on the
+  `sidecar` container so two containers sharing a network namespace don't
+  both try to bind port 80. See each subfolder's README under "Known
+  gotchas" for the specifics.

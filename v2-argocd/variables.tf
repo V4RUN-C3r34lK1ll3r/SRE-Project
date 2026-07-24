@@ -11,7 +11,7 @@ variable "project_name" {
 }
 
 variable "environment" {
-  description = "Environment tag applied to all resources"
+  description = "Environment suffix used when building resource names (e.g. rg-<project>-<environment>) -- not an Azure resource tag"
   type        = string
   default     = "argocd"
 }

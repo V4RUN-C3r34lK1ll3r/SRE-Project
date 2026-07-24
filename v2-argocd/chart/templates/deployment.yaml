@@ -34,6 +34,12 @@ spec:
               readOnly: true
         - name: sidecar
           image: {{ .Values.image }}
+          # Containers in a pod share a network namespace, same as
+          # containers in a single Container App revision (see v1). Both
+          # containers defaulting to nginx would both try to bind :80 and
+          # one would crash-loop -- keep the sidecar as a non-listening
+          # placeholder instead.
+          command: ["sleep", "infinity"]
           env:
             - name: SIDECAR_SECRET
               valueFrom:

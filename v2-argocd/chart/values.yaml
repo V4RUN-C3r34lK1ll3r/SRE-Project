@@ -3,7 +3,11 @@ replicaCount: 1
 image: nginx:latest
 
 keyVault:
-  name: kv-sretakehomarg
+  # Includes a random 4-character suffix (Key Vault names are globally
+  # unique across Azure), so this can't be hardcoded to a fixed value.
+  # Comes from `terraform output key_vault_name` in v2-argocd/ -- set here
+  # (or via the ArgoCD Application's helm values override) after `apply`.
+  name: ""
   tenantId: aef7b0b3-a142-4378-9c05-d52f96f8f5b5
   # Client ID of the AKS Key Vault Secrets Provider addon's managed identity.
   # Comes from `terraform output key_vault_secrets_provider_client_id` in
