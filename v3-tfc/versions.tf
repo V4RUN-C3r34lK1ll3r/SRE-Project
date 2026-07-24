@@ -2,10 +2,10 @@ terraform {
   required_version = ">= 1.5.0"
 
   cloud {
-    organization = "REPLACE_WITH_YOUR_TFC_ORG"
+    organization = "varunzackv"
 
     workspaces {
-      name = "sre-takehome-hcf"
+      name = "SRE-Project"
     }
   }
 
