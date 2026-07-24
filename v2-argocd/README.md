@@ -21,22 +21,31 @@ and does **not** define the Kubernetes Deployment, Service, or
 SecretProviderClass -- those live in [chart/](chart/) and are applied by
 ArgoCD, not by `terraform apply`.
 
-This is deliberate, not a scope cut:
+This is a deliberate choice for *this repo*, not a claim that Terraform can
+never own ArgoCD's install -- plenty of platform teams do exactly that
+successfully, usually via a dedicated bootstrap module that's versioned and
+applied separately from the application infrastructure it later manages.
+The reasons this repo keeps them separate instead:
 
 - Once ArgoCD is watching a cluster, anything Terraform also tries to manage
   inside that same cluster becomes a **reconciliation fight** -- ArgoCD's
-  `selfHeal` will revert changes it didn't make, including Terraform's.
+  `selfHeal` will revert changes it didn't make, including Terraform's. A
+  dedicated bootstrap module sidesteps this by only ever touching ArgoCD
+  itself, never the apps ArgoCD subsequently manages -- but that's an extra
+  module and workspace boundary this exercise doesn't need.
 - It mirrors a real separation of concerns: **infrastructure lifecycle**
   (Terraform, changes rarely) vs. **application delivery lifecycle**
-  (ArgoCD, changes on every merge). Different tools, different cadences, on
-  purpose.
-- It also sidesteps a genuine Terraform/ArgoCD gotcha worth knowing: the
-  `kubernetes_manifest` resource does a schema-validated dry run against the
-  cluster at plan time, which means it needs the CRD it's targeting (like
-  ArgoCD's own `Application` CRD) to already exist -- a chicken-and-egg
-  problem if the same `apply` both installs ArgoCD and defines an
-  `Application` for it. Keeping ArgoCD's install and the `Application`
-  manifest outside Terraform avoids that two-phase-apply headache entirely.
+  (ArgoCD, changes on every merge). Different tools, different cadences.
+- The concrete, non-negotiable reason: the `kubernetes_manifest` resource
+  does a schema-validated dry run against the cluster **at plan time**,
+  which means it needs the CRD it's targeting (like ArgoCD's own
+  `Application` CRD) to already exist. If the *same* `apply` both installs
+  ArgoCD and defines an `Application` for it, that's a chicken-and-egg
+  problem -- true regardless of whether ArgoCD's install itself is
+  Terraform-managed or not. A separate bootstrap module solves this by
+  applying in two phases (install ArgoCD, then apply the `Application` in a
+  later run); this repo solves it by keeping the `Application` manifest
+  out of Terraform entirely.
 
 ## What Terraform builds
 
@@ -73,11 +82,13 @@ $(terraform output -raw get_credentials_command)
 helm repo add argo https://argoproj.github.io/argo-helm
 helm install argocd argo/argo-cd --namespace argocd --create-namespace
 
-# wire the addon identity and Key Vault name into the chart, then apply the Application
+# wire the addon identity, Key Vault name, and tenant ID into the chart, then apply the Application
 CLIENT_ID=$(terraform output -raw key_vault_secrets_provider_client_id)
 KV_NAME=$(terraform output -raw key_vault_name)
+TENANT_ID=$(terraform output -raw tenant_id)
 sed -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_CLIENT_ID/$CLIENT_ID/" \
     -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_KV_NAME/$KV_NAME/" \
+    -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_TENANT_ID/$TENANT_ID/" \
     argocd-application.yaml | kubectl apply -f -
 ```
 
@@ -103,6 +114,16 @@ future change to the chart on `main` gets reconciled automatically
   occasionally 403 on the first secret write even with `depends_on`
   ordering the API calls correctly, since the role assignment itself can
   take a minute or two to propagate. A second `apply` fixes it.
+- **Rotation only reaches the mounted file and the Secret object, not a
+  running pod's environment**: `secret_rotation_enabled = true` makes the
+  CSI driver periodically re-pull from Key Vault and update the mounted
+  file *and* the synced `app-secrets` Kubernetes Secret. But this Deployment
+  reads secrets via `secretKeyRef` into an env var, and **env vars are only
+  read once, at container start** -- a pod has to actually restart to pick
+  up a rotated value. (The mounted file at `/mnt/secrets-store` *does*
+  update live, which is why some workloads read secrets from the file
+  directly instead of an env var, specifically to get live rotation without
+  a restart.)
 
 ## Cost notes
 

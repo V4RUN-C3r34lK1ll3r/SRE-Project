@@ -8,7 +8,10 @@ keyVault:
   # Comes from `terraform output key_vault_name` in v2-argocd/ -- set here
   # (or via the ArgoCD Application's helm values override) after `apply`.
   name: ""
-  tenantId: aef7b0b3-a142-4378-9c05-d52f96f8f5b5
+  # Not hardcoded to one tenant -- comes from `terraform output tenant_id`,
+  # same pattern as name and userAssignedIdentityID below. Keeps the chart
+  # portable to a different tenant instead of silently pointing at this one.
+  tenantId: ""
   # Client ID of the AKS Key Vault Secrets Provider addon's managed identity.
   # Comes from `terraform output key_vault_secrets_provider_client_id` in
   # v2-argocd/ -- set here (or via the ArgoCD Application's helm values

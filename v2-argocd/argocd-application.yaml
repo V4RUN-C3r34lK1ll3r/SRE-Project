@@ -11,13 +11,17 @@ spec:
     path: v2-argocd/chart
     helm:
       parameters:
-        # Both filled in from `terraform output` after `apply` -- see
-        # README.md. The Key Vault name isn't deterministic (random
-        # suffix), so it can't be hardcoded any more than the client ID.
+        # All three filled in from `terraform output` after `apply` -- see
+        # README.md. Nothing here is hardcoded: the Key Vault name isn't
+        # deterministic (random suffix), the client ID doesn't exist until
+        # AKS creates the addon identity, and the tenant ID is left out of
+        # the chart so it isn't silently pinned to one specific tenant.
         - name: keyVault.userAssignedIdentityID
           value: REPLACE_WITH_TERRAFORM_OUTPUT_CLIENT_ID
         - name: keyVault.name
           value: REPLACE_WITH_TERRAFORM_OUTPUT_KV_NAME
+        - name: keyVault.tenantId
+          value: REPLACE_WITH_TERRAFORM_OUTPUT_TENANT_ID
   destination:
     server: https://kubernetes.default.svc
     namespace: default

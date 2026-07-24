@@ -54,14 +54,17 @@ Workspace created via the **Version Control Workflow** (linked directly to
 this GitHub repo), which is why it's named `SRE-Project` rather than the
 `sre-takehome-hcf` name a CLI-driven workspace would have used -- the code
 was updated to match what was actually created rather than force a rename.
-**Terraform Working Directory** is set to `v3-tfc` on the workspace (Settings
+**Terraform Working Directory** is set to `v3-hcf` on the workspace (Settings
 → General), since this repo has three separate configs in three subfolders.
+(This folder was renamed from `v3-tfc` to `v3-hcf` to match the `-hcf`
+resource suffix -- if your workspace still points at `v3-tfc`, update it in
+the TFC UI or the next run will find no `.tf` files.)
 
 ## Setup
 
 1. Sign up at [app.terraform.io](https://app.terraform.io), create an
    organization, create a workspace linked to this repo.
-2. Set the workspace's **Terraform Working Directory** to `v3-tfc`.
+2. Set the workspace's **Terraform Working Directory** to `v3-hcf`.
 3. Set **Execution Mode** to **Remote**.
 4. Create a service principal and grant it Contributor + User Access
    Administrator on the subscription (the latter needs an Azure Condition

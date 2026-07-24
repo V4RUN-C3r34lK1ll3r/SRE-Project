@@ -8,7 +8,7 @@ comparison ready for the interview discussion, not just a hypothetical one.
 |---|---|---|---|---|
 | [v1-container-apps/](v1-container-apps/) | Azure Container Apps | `terraform apply` directly | Local | `-dev` |
 | [v2-argocd/](v2-argocd/) | AKS | Helm chart synced by ArgoCD (GitOps) | Local | `-argocd` |
-| [v3-tfc/](v3-tfc/) | Azure Container Apps | `terraform apply`, approved in the HCP Terraform UI | HCP Terraform (remote state, remote execution) | `-hcf` |
+| [v3-hcf/](v3-hcf/) | Azure Container Apps | `terraform apply`, approved in the HCP Terraform UI | HCP Terraform (remote state, remote execution) | `-hcf` |
 
 ## Why three
 
