@@ -32,4 +32,5 @@ terraform.rc
 # .terraform.lock.hcl
 
 # Personal interview prep notes -- not part of the take-home submission
-docs/primary.md
+docs/
+prep/
