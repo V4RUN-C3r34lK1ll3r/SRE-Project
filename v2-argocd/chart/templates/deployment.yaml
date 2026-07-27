@@ -28,6 +28,11 @@ spec:
                 secretKeyRef:
                   name: app-secrets
                   key: APP_SECRET
+            - name: REDIS_CONNECTION_STRING
+              valueFrom:
+                secretKeyRef:
+                  name: app-secrets
+                  key: REDIS_CONNECTION_STRING
           volumeMounts:
             - name: secrets-store
               mountPath: "/mnt/secrets-store"

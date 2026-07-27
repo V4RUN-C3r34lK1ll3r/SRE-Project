@@ -100,3 +100,14 @@ the kind of action that should get flagged**, not run silently -- it's a
 role that can grant any permission to anyone on its scope. It was granted
 manually in the Azure Portal instead, which is also why Azure requires an
 extra Conditions step for that specific role.
+
+## Redis, applied via the service principal
+
+`main.tf` includes the same VNet + private Redis + private endpoint setup
+as v1 (see [v1's README](../v1-container-apps/README.md#redis-connectivity--how-it-actually-works-here)
+for the full flow). No extra IAM was needed to support it -- the service
+principal's existing Contributor role already covers creating VNets,
+subnets, private endpoints, and the Redis cache itself; only Key Vault RBAC
+role *assignments* needed the separate User Access Administrator grant.
+Same cost note as v1: Redis has no free tier, apply briefly, destroy right
+after confirming it works.

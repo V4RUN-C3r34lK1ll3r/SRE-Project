@@ -5,6 +5,32 @@ resource "azurerm_resource_group" "this" {
   location = var.location
 }
 
+### Networking for private Redis connectivity #######################
+# AKS needs to be in the same VNet as Redis's private endpoint to reach
+# it privately -- unlike Container Apps, this doesn't have to be set at
+# cluster creation, but it's simplest to wire up from the start.
+
+resource "azurerm_virtual_network" "this" {
+  name                = "vnet-${var.project_name}-${var.environment}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  address_space       = ["10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "aks_nodes" {
+  name                 = "snet-aks-nodes"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = ["10.0.0.0/23"]
+}
+
+resource "azurerm_subnet" "private_endpoints" {
+  name                 = "snet-private-endpoints"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = ["10.0.2.0/27"]
+}
+
 ### AKS cluster #####################################################
 # Single small node, Free control-plane tier -- this is a short-lived
 # demo cluster (applied briefly, screenshotted, destroyed), not sized
@@ -22,13 +48,18 @@ resource "azurerm_kubernetes_cluster" "this" {
   sku_tier            = "Free"
 
   default_node_pool {
-    name       = "default"
-    node_count = 1
-    vm_size    = var.node_vm_size
+    name           = "default"
+    node_count     = 1
+    vm_size        = var.node_vm_size
+    vnet_subnet_id = azurerm_subnet.aks_nodes.id
   }
 
   identity {
     type = "SystemAssigned"
+  }
+
+  network_profile {
+    network_plugin = "azure"
   }
 
   key_vault_secrets_provider {
@@ -92,6 +123,65 @@ resource "azurerm_key_vault_secret" "secret_one" {
 resource "azurerm_key_vault_secret" "secret_two" {
   name         = "secret-two"
   value        = var.secret_two_value
+  key_vault_id = azurerm_key_vault.this.id
+
+  depends_on = [azurerm_role_assignment.terraform_caller_kv_officer]
+}
+
+### Redis, private-only, reached via the VNet above #################
+# Azure Cache for Redis has no free tier -- meant to be applied briefly
+# to confirm it works, then destroyed. public_network_access_enabled =
+# false means the only way in is through the private endpoint below.
+
+resource "azurerm_redis_cache" "this" {
+  name                          = "redis-${var.project_name}-${var.environment}"
+  resource_group_name           = azurerm_resource_group.this.name
+  location                      = azurerm_resource_group.this.location
+  capacity                      = 0
+  family                        = "C"
+  sku_name                      = "Basic"
+  minimum_tls_version           = "1.2"
+  public_network_access_enabled = false
+}
+
+resource "azurerm_private_dns_zone" "redis" {
+  name                = "privatelink.redis.cache.windows.net"
+  resource_group_name = azurerm_resource_group.this.name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "redis" {
+  name                  = "link-${var.project_name}-${var.environment}"
+  resource_group_name   = azurerm_resource_group.this.name
+  private_dns_zone_name = azurerm_private_dns_zone.redis.name
+  virtual_network_id    = azurerm_virtual_network.this.id
+}
+
+resource "azurerm_private_endpoint" "redis" {
+  name                = "pe-redis-${var.project_name}-${var.environment}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  subnet_id           = azurerm_subnet.private_endpoints.id
+
+  private_service_connection {
+    name                           = "psc-redis"
+    private_connection_resource_id = azurerm_redis_cache.this.id
+    subresource_names              = ["redisCache"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "default"
+    private_dns_zone_ids = [azurerm_private_dns_zone.redis.id]
+  }
+}
+
+# Same pattern as the two app secrets above -- read straight off the
+# resource Terraform just created, synced into the cluster the same way
+# by the same SecretProviderClass, no separate wiring needed on the k8s
+# side beyond adding one more entry to it.
+resource "azurerm_key_vault_secret" "redis_connection_string" {
+  name         = "redis-connection-string"
+  value        = azurerm_redis_cache.this.primary_connection_string
   key_vault_id = azurerm_key_vault.this.id
 
   depends_on = [azurerm_role_assignment.terraform_caller_kv_officer]

@@ -50,20 +50,30 @@ The reasons this repo keeps them separate instead:
 ## What Terraform builds
 
 - Resource group
+- Virtual network with a subnet for the AKS nodes (`network_plugin =
+  "azure"`, so pods get real VNet IPs) and a subnet for the Redis private
+  endpoint
 - AKS cluster -- one `Standard_B2s` node, `sku_tier = "Free"` (no control
-  plane SLA charge), Key Vault Secrets Provider addon enabled
-- Key Vault (RBAC-authorized), two secrets
+  plane SLA charge), Key Vault Secrets Provider addon enabled, VNet-attached
+- Key Vault (RBAC-authorized), three secrets
   - "Key Vault Secrets Officer" role → the Terraform caller (write)
   - "Key Vault Secrets User" role → the AKS addon's own managed identity
     (read) -- same RBAC pattern as v1, just handed to a cluster addon
     instead of a container app's identity
+- **Azure Cache for Redis** (Basic C0), `public_network_access_enabled =
+  false`, reachable only through a private endpoint in the subnet above,
+  with a private DNS zone so the hostname resolves privately
+- The Redis connection string, written straight to Key Vault as the third
+  secret
 
 ## What the Helm chart builds (synced by ArgoCD, not Terraform)
 
 - `SecretProviderClass` -- tells the CSI driver which Key Vault secrets to
-  pull, and mirrors them into a native Kubernetes `Secret` (`app-secrets`)
+  pull (now three), and mirrors them into a native Kubernetes `Secret`
+  (`app-secrets`)
 - `Deployment` -- one pod, two containers (`web`, `sidecar`), same shape as
-  v1's container app, each reading one secret via `secretKeyRef`
+  v1's container app; `web` reads `APP_SECRET` and `REDIS_CONNECTION_STRING`,
+  `sidecar` reads `SIDECAR_SECRET`, all via `secretKeyRef`
 - `Service` -- ClusterIP, for parity with v1's ingress
 
 ## Bootstrap (one-time, manual -- not Terraform)
@@ -131,8 +141,10 @@ Everything here is meant to run briefly for a demo, then be torn down with
 `terraform destroy` -- unlike v1, this version has an **always-on cost**
 while it exists (the AKS node VM bills per hour regardless of use; the
 control plane itself is free on the `Free` SKU tier). A single `Standard_B2s`
-node for a short demo session is a small fraction of a dollar, but don't
-leave it running.
+node for a short demo session is a small fraction of a dollar. **Redis adds
+its own cost on top** -- no free tier at all, Basic C0 is about
+$0.02/hour -- so this version now has two always-on cost surfaces while it
+exists, not one. Don't leave it running.
 
 ## How this compares to v1
 
@@ -143,3 +155,4 @@ leave it running.
 | Secrets | Key Vault → container app via `key_vault_secret_id` | Key Vault → Kubernetes `Secret` via the CSI driver's `SecretProviderClass` |
 | Drift correction | None built in | Automatic -- ArgoCD's `selfHeal` reverts manual changes |
 | Operational overhead | Near zero | A cluster to patch, upgrade, and pay for |
+| Redis reachability | Container Apps environment VNet-integrated at creation | AKS cluster's own VNet integration (`network_plugin = "azure"`) |

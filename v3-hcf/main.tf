@@ -5,6 +5,41 @@ resource "azurerm_resource_group" "this" {
   location = var.location
 }
 
+### Networking for private Redis connectivity #######################
+# Container Apps environments only reach private endpoints (like a
+# private-only Redis cache) if VNet-integrated -- and that has to be set
+# at environment *creation*, not added later. Two subnets: one delegated
+# to the Container Apps environment itself, one for the Redis private
+# endpoint.
+
+resource "azurerm_virtual_network" "this" {
+  name                = "vnet-${var.project_name}-${var.environment}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  address_space       = ["10.0.0.0/16"]
+}
+
+resource "azurerm_subnet" "container_apps" {
+  name                 = "snet-container-apps"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = ["10.0.0.0/23"]
+
+  delegation {
+    name = "Microsoft.App/environments"
+    service_delegation {
+      name = "Microsoft.App/environments"
+    }
+  }
+}
+
+resource "azurerm_subnet" "private_endpoints" {
+  name                 = "snet-private-endpoints"
+  resource_group_name  = azurerm_resource_group.this.name
+  virtual_network_name = azurerm_virtual_network.this.name
+  address_prefixes     = ["10.0.2.0/27"]
+}
+
 ### Observability backend for the Container Apps environment #####
 # Container Apps environments require a Log Analytics workspace for
 # their built-in log streaming / diagnostic sink, even before you
@@ -23,6 +58,7 @@ resource "azurerm_container_app_environment" "this" {
   resource_group_name        = azurerm_resource_group.this.name
   location                   = azurerm_resource_group.this.location
   log_analytics_workspace_id = azurerm_log_analytics_workspace.this.id
+  infrastructure_subnet_id   = azurerm_subnet.container_apps.id
 }
 
 ### Identity used by the Container App to read Key Vault secrets ##
@@ -92,6 +128,68 @@ resource "azurerm_key_vault_secret" "secret_two" {
   depends_on = [azurerm_role_assignment.terraform_caller_kv_officer]
 }
 
+### Redis, private-only, reached via the VNet above #################
+# Azure Cache for Redis has no free tier -- this is meant to be applied
+# briefly to confirm it works, then destroyed. public_network_access_enabled
+# = false means the only way in is through the private endpoint below;
+# there is no public address to accidentally expose.
+
+resource "azurerm_redis_cache" "this" {
+  name                          = "redis-${var.project_name}-${var.environment}"
+  resource_group_name           = azurerm_resource_group.this.name
+  location                      = azurerm_resource_group.this.location
+  capacity                      = 0
+  family                        = "C"
+  sku_name                      = "Basic"
+  minimum_tls_version           = "1.2"
+  public_network_access_enabled = false
+}
+
+# Lets the container app's environment resolve the Redis hostname to the
+# private endpoint's IP instead of a public one -- without this, DNS still
+# resolves to Redis's public FQDN even though public access is disabled.
+resource "azurerm_private_dns_zone" "redis" {
+  name                = "privatelink.redis.cache.windows.net"
+  resource_group_name = azurerm_resource_group.this.name
+}
+
+resource "azurerm_private_dns_zone_virtual_network_link" "redis" {
+  name                  = "link-${var.project_name}-${var.environment}"
+  resource_group_name   = azurerm_resource_group.this.name
+  private_dns_zone_name = azurerm_private_dns_zone.redis.name
+  virtual_network_id    = azurerm_virtual_network.this.id
+}
+
+resource "azurerm_private_endpoint" "redis" {
+  name                = "pe-redis-${var.project_name}-${var.environment}"
+  resource_group_name = azurerm_resource_group.this.name
+  location            = azurerm_resource_group.this.location
+  subnet_id           = azurerm_subnet.private_endpoints.id
+
+  private_service_connection {
+    name                           = "psc-redis"
+    private_connection_resource_id = azurerm_redis_cache.this.id
+    subresource_names              = ["redisCache"]
+    is_manual_connection           = false
+  }
+
+  private_dns_zone_group {
+    name                 = "default"
+    private_dns_zone_ids = [azurerm_private_dns_zone.redis.id]
+  }
+}
+
+# Same pattern as the two app secrets above -- the connection string never
+# sits in a variable or a committed file, it's read straight off the
+# resource Terraform just created and handed to Key Vault directly.
+resource "azurerm_key_vault_secret" "redis_connection_string" {
+  name         = "redis-connection-string"
+  value        = azurerm_redis_cache.this.primary_connection_string
+  key_vault_id = azurerm_key_vault.this.id
+
+  depends_on = [azurerm_role_assignment.terraform_caller_kv_officer]
+}
+
 ### Container App ###################################################
 # Two containers (nginx placeholder image per the assignment), each
 # with one Key Vault-backed secret surfaced as an env var.
@@ -119,6 +217,12 @@ resource "azurerm_container_app" "this" {
     key_vault_secret_id = azurerm_key_vault_secret.secret_two.versionless_id
   }
 
+  secret {
+    name                = "redis-connection-string"
+    identity            = azurerm_user_assigned_identity.container_app.id
+    key_vault_secret_id = azurerm_key_vault_secret.redis_connection_string.versionless_id
+  }
+
   template {
     container {
       name   = "web"
@@ -129,6 +233,11 @@ resource "azurerm_container_app" "this" {
       env {
         name        = "APP_SECRET"
         secret_name = "secret-one"
+      }
+
+      env {
+        name        = "REDIS_CONNECTION_STRING"
+        secret_name = "redis-connection-string"
       }
     }
 

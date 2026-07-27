@@ -3,6 +3,12 @@
 Same brief — an Azure-hosted app running two containers with one or two
 secrets associated with it — built three different ways to have a real
 comparison ready for the interview discussion, not just a hypothetical one.
+All three also implement the **Redis connectivity** discussion topic for
+real: a private-only Azure Cache for Redis instance, reached through VNet
+integration + a private endpoint + a private DNS zone, with the connection
+string flowing through the same Key Vault + managed-identity pattern as
+every other secret. Not a diagram — actual resources, applied live and
+confirmed working before teardown.
 
 | | Compute | Delivery | State backend | Resource suffix |
 |---|---|---|---|---|
@@ -40,3 +46,8 @@ specifically. None of them share state with each other.
   `sidecar` container so two containers sharing a network namespace don't
   both try to bind port 80. See each subfolder's README under "Known
   gotchas" for the specifics.
+- All three include a private Redis cache reached the same way: VNet
+  integration, a private endpoint, a private DNS zone, and the connection
+  string landing in Key Vault as just another secret. Redis has no free
+  tier, so this is applied briefly to confirm it works end to end, then
+  torn down -- not left running.

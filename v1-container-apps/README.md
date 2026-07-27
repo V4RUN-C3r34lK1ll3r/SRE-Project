@@ -8,14 +8,25 @@ this compares to v2 and v3.
 ## What this builds
 
 - Resource group
+- Virtual network with two subnets: one delegated to the Container Apps
+  environment (VNet integration has to be set at environment *creation*,
+  not added later), one for the Redis private endpoint
 - Log Analytics workspace + Container Apps environment (log sink for the
-  environment's built-in log streaming)
+  environment's built-in log streaming), VNet-integrated into the subnet
+  above
 - User-assigned managed identity for the container app
-- Key Vault (RBAC-authorized) with two secrets
+- Key Vault (RBAC-authorized) with three secrets
   - one role assignment lets the Terraform caller write secrets
   - one role assignment lets the container app's identity read secrets
-- Container App with two containers, each pulling one secret in as an
-  environment variable via a Key Vault-backed `secret` block
+- **Azure Cache for Redis** (Basic C0), `public_network_access_enabled =
+  false` -- reachable only through the private endpoint below
+- A private DNS zone (`privatelink.redis.cache.windows.net`) linked to the
+  VNet, so the Redis hostname resolves to the private endpoint's IP instead
+  of a public address
+- A private endpoint connecting Redis into the private-endpoints subnet
+- Container App with two containers, each pulling a secret in as an
+  environment variable via a Key Vault-backed `secret` block -- including
+  the Redis connection string on the `web` container
 
 ## Why Key Vault instead of native container app secrets
 
@@ -68,22 +79,33 @@ Secrets are marked `sensitive` and have no default — set them via
 
 ## Cost notes
 
-Container Apps consumption plan and Log Analytics both have an always-free
-monthly grant that easily covers a short-lived test of this stack. Key Vault
-has no free tier but bills per-operation (fractions of a cent for a test
-run). Managed identities and role assignments are free.
+Container Apps consumption plan, Log Analytics, the VNet, subnets, and the
+private endpoint all have an always-free grant or no meaningful cost for a
+short-lived test. Key Vault bills per-operation (fractions of a cent).
+**Redis is the exception** -- Azure Cache for Redis has no free tier at all;
+Basic C0 runs about $0.02/hour. Meant to be applied briefly to confirm it
+works end to end, then torn down with `terraform destroy` -- not left
+running.
 
-## Stretch topics (not built here, for discussion)
+## Redis connectivity -- how it actually works here
 
-**Observability**: Container Apps' built-in log streaming for a quick tail;
-a `diagnostic_setting` on the environment routing logs to the Log Analytics
+1. The Container Apps environment is VNet-integrated (`infrastructure_subnet_id`),
+   which has to be decided at environment creation.
+2. Redis has `public_network_access_enabled = false` -- there is no public
+   address to reach it through at all.
+3. A private endpoint puts Redis inside the VNet's private-endpoints
+   subnet; a private DNS zone makes the Redis hostname resolve to that
+   endpoint's private IP instead of a public one.
+4. The connection string is read straight off the `azurerm_redis_cache`
+   resource and written to Key Vault as a third secret -- never touches a
+   variable, a file, or Terraform state as plaintext.
+5. The `web` container gets it as `REDIS_CONNECTION_STRING`, using the same
+   Key Vault secret + managed identity pattern as the other two secrets.
+
+## Observability (discussion topic, not built here)
+
+Container Apps' built-in log streaming for a quick tail; a
+`diagnostic_setting` on the environment routing logs to the Log Analytics
 workspace already provisioned here; Azure Monitor metric alerts on
 CPU/memory/replica count; Application Insights if request-level tracing is
 needed.
-
-**Connectivity to a Redis cache**: VNet-integrate the Container Apps
-environment, deploy `azurerm_redis_cache` inside that VNet, expose it via a
-private endpoint + private DNS zone so the app never resolves a public
-address, and surface the connection string as a Key Vault secret using the
-same identity/role-assignment pattern already in place for the two secrets
-above.
