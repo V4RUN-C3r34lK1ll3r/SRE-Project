@@ -101,6 +101,21 @@ role that can grant any permission to anyone on its scope. It was granted
 manually in the Azure Portal instead, which is also why Azure requires an
 extra Conditions step for that specific role.
 
+**`terraform apply` from the CLI is blocked entirely on this workspace**:
+`Error: Apply not allowed for workspaces with a VCS connection`. A
+VCS-linked TFC workspace allows CLI-driven `plan` (read-only, safe from
+anywhere) but requires `apply` to originate from a VCS-driven run -- either
+a git push, or a run queued directly in the TFC UI (**Actions → Start new
+run**), approved via **Confirm & Apply** there. Confirmed live: applied and
+later destroyed entirely through the TFC UI for this reason.
+
+**The Terraform Working Directory setting doesn't follow a folder rename
+automatically**: after `v3-tfc/` was renamed to `v3-hcf/` in git, the
+workspace setting itself still pointed at the old path until updated by
+hand in Settings → General -- a code-level rename and a live external
+system's config are two different things, and it's easy to fix the first
+and forget the second.
+
 ## Redis, applied via the service principal
 
 `main.tf` includes the same VNet + private Redis + private endpoint setup

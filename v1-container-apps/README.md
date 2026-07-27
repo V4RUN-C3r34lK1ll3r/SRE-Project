@@ -42,6 +42,21 @@ Key Vault, not state), so without `lifecycle { ignore_changes = [secret] }`
 on the container app resource, every `plan` shows a spurious pending change.
 That's handled in [main.tf](main.tf).
 
+## Live results (confirmed on a real apply)
+
+- Container App FQDN: `ca-sre-takehome-dev.ashymoss-60a28bfc.eastus.azurecontainerapps.io`
+  (confirmed reachable, returned HTTP 200)
+- Key Vault URI: `https://kv-sretakehomdevd632.vault.azure.net/`
+- Redis hostname: `redis-sre-takehome-dev.redis.cache.windows.net`
+- Redis private endpoint IP: `10.0.2.4`
+
+Torn down with `terraform destroy` immediately after confirming -- 19
+resources destroyed, nothing left running. The first attempt at this apply
+actually failed after 22+ minutes with a transient Azure regional capacity
+error (`ManagedEnvironmentCapacityHeavyUsageError`), which left an orphaned
+`Failed`-state Container App Environment that had to be deleted manually
+(`az containerapp env delete`) before a clean retry succeeded.
+
 ## Known gotchas
 
 - **RBAC propagation delay**: the Key Vault secrets `depends_on` the

@@ -24,6 +24,8 @@ confirmed working before teardown.
   actually runs" — AKS instead of a serverless container platform, secrets
   synced from Key Vault into Kubernetes natively, and delivery handled by
   ArgoCD reconciling a Helm chart instead of a direct `terraform apply`.
+  Confirmed live end to end, including logging into the ArgoCD UI itself
+  and watching it report the deployed app as `Synced` / `Healthy`.
 - **v3** answers "what changes if this needs to be run by a team, not a
   single laptop" — same infrastructure as v1, but state lives in HCP
   Terraform (remote, locked, versioned) instead of a local `.tfstate` file.

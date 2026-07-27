@@ -53,8 +53,10 @@ The reasons this repo keeps them separate instead:
 - Virtual network with a subnet for the AKS nodes (`network_plugin =
   "azure"`, so pods get real VNet IPs) and a subnet for the Redis private
   endpoint
-- AKS cluster -- one `Standard_B2s` node, `sku_tier = "Free"` (no control
+- AKS cluster -- one `Standard_D2s_v3` node, `sku_tier = "Free"` (no control
   plane SLA charge), Key Vault Secrets Provider addon enabled, VNet-attached
+  (originally `Standard_B2s`; switched after a live apply found it blocked
+  by this subscription's allowed-VM-SKU policy -- see "Known gotchas" below)
 - Key Vault (RBAC-authorized), three secrets
   - "Key Vault Secrets Officer" role → the Terraform caller (write)
   - "Key Vault Secrets User" role → the AKS addon's own managed identity
@@ -106,8 +108,29 @@ From there ArgoCD takes over: it syncs `chart/` from this repo, and any
 future change to the chart on `main` gets reconciled automatically
 (`prune: true`, `selfHeal: true`).
 
+## Live results (confirmed on a real apply)
+
+This version has been applied live end to end: AKS cluster up, ArgoCD
+installed via Helm, the app deployed through a real ArgoCD `Application`
+(GitOps sync from this repo, not `kubectl apply` on the Deployment
+directly), reporting **Synced / Healthy**. The Redis connection string was
+confirmed present as an env var inside the running container (checked via a
+presence count, not by printing the secret value). Torn down with
+`terraform destroy` immediately after confirming -- 16 resources destroyed,
+nothing left running.
+
 ## Known gotchas
 
+- **`Standard_B2s` is blocked by an allowed-VM-SKU policy on this
+  subscription** -- a *different* restriction from vCPU quota (which this
+  subscription does have, post-upgrade). The cluster creation error names
+  the exact allowed list; `Standard_D2s_v3` (same 2 vCPU / 8 GiB shape) is
+  on it and is what `variables.tf` defaults to now.
+- **AKS's default Kubernetes service CIDR collides with this version's own
+  VNet**: AKS defaults `network_profile.service_cidr` to `10.0.0.0/16` when
+  unset, which overlaps this version's own `10.0.0.0/16` VNet (added for
+  the Redis private endpoint). Fixed by pinning `service_cidr =
+  "10.100.0.0/16"` and `dns_service_ip = "10.100.0.10"` explicitly.
 - **Containers sharing a network namespace**: a pod's containers share
   networking, same as containers in a single Container App revision (v1).
   Both containers defaulting to `nginx:latest` would both try to bind `:80`
