@@ -17,9 +17,9 @@ variable "environment" {
 }
 
 variable "node_vm_size" {
-  description = "VM size for the single AKS node pool -- kept small since this is a short-lived demo cluster"
+  description = "VM size for the single AKS node pool -- kept small since this is a short-lived demo cluster. Standard_B2s is blocked by this subscription's allowed-VM-SKU policy, so Standard_D2s_v3 is used instead (same 2 vCPU / 8 GiB shape)."
   type        = string
-  default     = "Standard_B2s"
+  default     = "Standard_D2s_v3"
 }
 
 variable "secret_one_value" {

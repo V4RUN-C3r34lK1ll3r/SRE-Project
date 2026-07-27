@@ -60,6 +60,10 @@ resource "azurerm_kubernetes_cluster" "this" {
 
   network_profile {
     network_plugin = "azure"
+    # AKS's default Kubernetes service CIDR (10.0.0.0/16) overlaps our own
+    # VNet address space, so it's pinned to a range outside 10.0.0.0/16.
+    service_cidr   = "10.100.0.0/16"
+    dns_service_ip = "10.100.0.10"
   }
 
   key_vault_secrets_provider {
