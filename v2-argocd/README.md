@@ -13,41 +13,55 @@ real, running comparison ready for the "what would this look like on a
 Kubernetes-based platform" conversation, instead of answering from a
 hypothetical.
 
-## Deliberate design choice: Terraform stops at the cloud boundary
+## Two Terraform roots, two different lifecycles
 
-Terraform in this folder provisions **cloud infrastructure only** -- resource
-group, AKS cluster, Key Vault, secrets, RBAC. It does **not** install ArgoCD
-and does **not** define the Kubernetes Deployment, Service, or
-SecretProviderClass -- those live in [chart/](chart/) and are applied by
-ArgoCD, not by `terraform apply`.
+This folder is split into two independent Terraform roots, each with its
+own state:
 
-This is a deliberate choice for *this repo*, not a claim that Terraform can
-never own ArgoCD's install -- plenty of platform teams do exactly that
-successfully, usually via a dedicated bootstrap module that's versioned and
-applied separately from the application infrastructure it later manages.
-The reasons this repo keeps them separate instead:
+- **[platform/](platform/)** — resource group, VNet, AKS cluster, Key
+  Vault, Redis, RBAC, and **ArgoCD itself** (installed via the `helm`
+  provider's `helm_release` resource, not a manual command). This is
+  infrastructure a platform team stands up and then leaves running --
+  applied rarely, destroyed rarely.
+- **[app/](app/)** — just the ArgoCD `Application` object that tells
+  ArgoCD to sync [chart/](chart/) from this repo. Applied once platform/
+  exists; cheap to redeploy or tear down on its own without touching the
+  cluster or reinstalling ArgoCD.
+- **[chart/](chart/)** — the actual Deployment/Service/SecretProviderClass.
+  Never touched by Terraform at all, in either root. Once `app/` has
+  applied once, changing the chart and pushing to `main` is enough --
+  ArgoCD's own sync loop (`prune: true`, `selfHeal: true`) picks it up with
+  zero Terraform involvement.
 
-- Once ArgoCD is watching a cluster, anything Terraform also tries to manage
-  inside that same cluster becomes a **reconciliation fight** -- ArgoCD's
-  `selfHeal` will revert changes it didn't make, including Terraform's. A
-  dedicated bootstrap module sidesteps this by only ever touching ArgoCD
-  itself, never the apps ArgoCD subsequently manages -- but that's an extra
-  module and workspace boundary this exercise doesn't need.
-- It mirrors a real separation of concerns: **infrastructure lifecycle**
-  (Terraform, changes rarely) vs. **application delivery lifecycle**
-  (ArgoCD, changes on every merge). Different tools, different cadences.
-- The concrete, non-negotiable reason: the `kubernetes_manifest` resource
-  does a schema-validated dry run against the cluster **at plan time**,
-  which means it needs the CRD it's targeting (like ArgoCD's own
-  `Application` CRD) to already exist. If the *same* `apply` both installs
-  ArgoCD and defines an `Application` for it, that's a chicken-and-egg
-  problem -- true regardless of whether ArgoCD's install itself is
-  Terraform-managed or not. A separate bootstrap module solves this by
-  applying in two phases (install ArgoCD, then apply the `Application` in a
-  later run); this repo solves it by keeping the `Application` manifest
-  out of Terraform entirely.
+The payoff: after `platform/` is up, you can redeploy, tweak, or fully
+tear down and recreate the *app* as many times as you want without ever
+touching the cluster or reinstalling ArgoCD -- matching how a real platform
+team runs ArgoCD (long-lived, provisioned once) versus how apps come and go
+on top of it (via GitOps, constantly).
 
-## What Terraform builds
+**This does not make AKS free to leave running** -- the node's per-hour
+cost is unchanged regardless of how the code is organized. The practical
+use is: apply `platform/` once before a demo/prep session and leave it up
+for the session; iterate on `app/` and `chart/` freely during that window;
+destroy `platform/` only when actually done. See "Cost notes" below.
+
+### Why splitting the Application into its own root is safe
+
+`kubernetes_manifest` does a schema-validated dry run against the live
+cluster **at plan time** -- it needs the CRD it targets (ArgoCD's own
+`Application` CRD) to already exist. Installing ArgoCD and defining an
+`Application` for it in the *same* apply would be a chicken-and-egg
+problem. Two separate root modules, always applied in order (`platform/`
+first, `app/` second, as genuinely separate `terraform apply`
+invocations), removes that problem structurally: by the time `app/` ever
+plans, `platform/` has already finished and the CRD already exists.
+
+One consequence worth knowing: `app/`'s `plan`/`apply` require the AKS
+cluster to actually exist and be reachable right now. It can't be planned
+against a destroyed or unreachable cluster -- expected, not a bug, since
+`app/` only makes sense while `platform/` is up.
+
+## What `platform/` builds
 
 - Resource group
 - Virtual network with a subnet for the AKS nodes (`network_plugin =
@@ -67,65 +81,96 @@ The reasons this repo keeps them separate instead:
   with a private DNS zone so the hostname resolves privately
 - The Redis connection string, written straight to Key Vault as the third
   secret
+- **ArgoCD** (`helm_release.argocd`, chart `argo/argo-cd`, namespace
+  `argocd`) -- the `helm`/`kubernetes` providers authenticate straight off
+  the AKS cluster's own `kube_config` output, no separate `az aks
+  get-credentials` step needed for this to apply
 
-## What the Helm chart builds (synced by ArgoCD, not Terraform)
+## What `app/` builds
+
+Exactly one resource: `kubernetes_manifest.argocd_application` -- the same
+ArgoCD `Application` object previously applied by hand via `kubectl apply`
+with `sed`-substituted values, now expressed as a native HCL object. It
+reads `platform/`'s outputs (Key Vault name, the addon's client ID, tenant
+ID) via a `terraform_remote_state` data source instead of copy-pasted
+`terraform output` values, so there's no manual substitution step left at
+all.
+
+## What the Helm chart builds (synced by ArgoCD, never Terraform)
 
 - `SecretProviderClass` -- tells the CSI driver which Key Vault secrets to
-  pull (now three), and mirrors them into a native Kubernetes `Secret`
+  pull (three), and mirrors them into a native Kubernetes `Secret`
   (`app-secrets`)
 - `Deployment` -- one pod, two containers (`web`, `sidecar`), same shape as
   v1's container app; `web` reads `APP_SECRET` and `REDIS_CONNECTION_STRING`,
   `sidecar` reads `SIDECAR_SECRET`, all via `secretKeyRef`
 - `Service` -- ClusterIP, for parity with v1's ingress
 
-## Bootstrap (one-time, manual -- not Terraform)
+## Usage
 
 ```bash
-cd v2-argocd
+# 1. Stand up the platform -- cluster + Key Vault + Redis + ArgoCD itself.
+#    Rare: do this once per demo/prep session, leave it running.
+cd v2-argocd/platform
 cp terraform.tfvars.example terraform.tfvars   # then edit, or use TF_VAR_* env vars
 terraform init
-terraform validate
 terraform apply
 
-# point kubectl/helm at the new cluster
-$(terraform output -raw get_credentials_command)
+# 2. Point ArgoCD at this repo's chart. Usually applied once; only needs
+#    re-running if the Application's own pointer config changes (repo URL,
+#    path, sync policy) -- not for ordinary chart edits.
+cd ../app
+terraform init
+terraform apply
 
-# install ArgoCD itself
-helm repo add argo https://argoproj.github.io/argo-helm
-helm install argocd argo/argo-cd --namespace argocd --create-namespace
+# From here on, changing chart/ and pushing to main is enough -- ArgoCD's
+# own sync loop picks it up. No Terraform involvement, no re-apply needed.
 
-# wire the addon identity, Key Vault name, and tenant ID into the chart, then apply the Application
-CLIENT_ID=$(terraform output -raw key_vault_secrets_provider_client_id)
-KV_NAME=$(terraform output -raw key_vault_name)
-TENANT_ID=$(terraform output -raw tenant_id)
-sed -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_CLIENT_ID/$CLIENT_ID/" \
-    -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_KV_NAME/$KV_NAME/" \
-    -e "s/REPLACE_WITH_TERRAFORM_OUTPUT_TENANT_ID/$TENANT_ID/" \
-    argocd-application.yaml | kubectl apply -f -
+# Optional: point your own kubectl/helm at the cluster too
+$(terraform -chdir=../platform output -raw get_credentials_command)
+kubectl port-forward svc/argocd-server -n argocd 8080:443
 ```
 
-From there ArgoCD takes over: it syncs `chart/` from this repo, and any
-future change to the chart on `main` gets reconciled automatically
-(`prune: true`, `selfHeal: true`).
+Teardown, in order:
+
+```bash
+cd v2-argocd/app && terraform destroy       # removes just the Application; ArgoCD prunes the workload under it
+cd ../platform && terraform destroy         # removes everything, including ArgoCD and AKS
+```
 
 ## Live results (confirmed on a real apply)
 
 This version has been applied live end to end: AKS cluster up, ArgoCD
-installed via Helm, the app deployed through a real ArgoCD `Application`
-(GitOps sync from this repo, not `kubectl apply` on the Deployment
-directly), reporting **Synced / Healthy**. The Redis connection string was
-confirmed present as an env var inside the running container (checked via a
-presence count, not by printing the secret value). Torn down with
-`terraform destroy` immediately after confirming -- 16 resources destroyed,
-nothing left running.
+installed, the app deployed through a real ArgoCD `Application` (GitOps
+sync from this repo, not `kubectl apply` on the Deployment directly),
+reporting **Synced / Healthy**. The Redis connection string was confirmed
+present as an env var inside the running container (checked via a presence
+count, not by printing the secret value). Torn down with `terraform
+destroy` immediately after confirming -- 16 resources destroyed, nothing
+left running.
+
+That run predates the `platform/`/`app/` split above -- it used a single
+Terraform root with ArgoCD installed by hand, the way this README described
+it at the time. The infrastructure and Helm chart are otherwise unchanged;
+only how the code is organized and how ArgoCD gets installed changed.
 
 ## Known gotchas
 
+- **`kubernetes_manifest` needs a live, reachable cluster at plan time, not
+  just apply time** -- `app/`'s `terraform plan` will fail outright if
+  `platform/`'s cluster has been destroyed or is unreachable. This is by
+  design (see "Why splitting the Application into its own root is safe"
+  above), not a bug to work around.
+- **`terraform_remote_state` with a `local` backend reads a file path, not
+  a live API** -- `app/` literally opens `../platform/terraform.tfstate`.
+  If `platform/`'s state file has moved, been deleted, or was never
+  applied, `app/`'s very first `terraform plan` fails immediately with a
+  clear "no state file" error rather than something more cryptic.
 - **`Standard_B2s` is blocked by an allowed-VM-SKU policy on this
   subscription** -- a *different* restriction from vCPU quota (which this
   subscription does have, post-upgrade). The cluster creation error names
   the exact allowed list; `Standard_D2s_v3` (same 2 vCPU / 8 GiB shape) is
-  on it and is what `variables.tf` defaults to now.
+  on it and is what `platform/variables.tf` defaults to now.
 - **AKS's default Kubernetes service CIDR collides with this version's own
   VNet**: AKS defaults `network_profile.service_cidr` to `10.0.0.0/16` when
   unset, which overlaps this version's own `10.0.0.0/16` VNet (added for
@@ -140,11 +185,10 @@ nothing left running.
 - **Key Vault name collisions**: vault names are globally unique across
   every Azure tenant. The name includes a random 4-character suffix
   (`random_string.kv_suffix`), which also means it **can't be hardcoded**
-  in `chart/values.yaml` -- it has to flow from `terraform output
-  key_vault_name` into the ArgoCD `Application`'s helm values, same as the
-  addon's client ID already does.
-- **RBAC propagation delay**: same risk as v1 -- a fresh `apply` can
-  occasionally 403 on the first secret write even with `depends_on`
+  in `chart/values.yaml` -- it flows from `platform/`'s outputs into
+  `app/`'s Application resource instead.
+- **RBAC propagation delay**: same risk as v1 -- a fresh `platform/ apply`
+  can occasionally 403 on the first secret write even with `depends_on`
   ordering the API calls correctly, since the role assignment itself can
   take a minute or two to propagate. A second `apply` fixes it.
 - **Rotation only reaches the mounted file and the Secret object, not a
@@ -160,14 +204,16 @@ nothing left running.
 
 ## Cost notes
 
-Everything here is meant to run briefly for a demo, then be torn down with
-`terraform destroy` -- unlike v1, this version has an **always-on cost**
-while it exists (the AKS node VM bills per hour regardless of use; the
-control plane itself is free on the `Free` SKU tier). A single `Standard_B2s`
-node for a short demo session is a small fraction of a dollar. **Redis adds
-its own cost on top** -- no free tier at all, Basic C0 is about
-$0.02/hour -- so this version now has two always-on cost surfaces while it
-exists, not one. Don't leave it running.
+`platform/` has an **always-on cost** while it exists (the AKS node VM
+bills per hour regardless of use, even though the control plane itself is
+free on the `Free` SKU tier; Redis adds its own always-on cost on top, no
+free tier at all, Basic C0 is about $0.02/hour). `app/` has effectively
+**zero marginal cost** -- it's a single Kubernetes custom resource, not a
+billed Azure resource. That asymmetry is the point of the split: iterate on
+`app/`/`chart/` as often as you like without it costing anything extra;
+the only thing actually burning money by the hour is `platform/`, so that's
+the one to consciously apply-once-and-destroy-when-done rather than
+recreate on every iteration.
 
 ## How this compares to v1
 
@@ -179,3 +225,4 @@ exists, not one. Don't leave it running.
 | Drift correction | None built in | Automatic -- ArgoCD's `selfHeal` reverts manual changes |
 | Operational overhead | Near zero | A cluster to patch, upgrade, and pay for |
 | Redis reachability | Container Apps environment VNet-integrated at creation | AKS cluster's own VNet integration (`network_plugin = "azure"`) |
+| Redeploy cost | Full `terraform apply`/`destroy` cycle every time | `platform/` applied once and left running; `app/`/`chart/` redeploy freely on top, no marginal cost |

@@ -1,7 +1,7 @@
 location     = "eastus"
 project_name = "sre-takehome"
 environment  = "argocd"
-node_vm_size = "Standard_B2s"
+node_vm_size = "Standard_D2s_v3"
 
 # Do not put real values here or in any committed .tfvars file.
 # Set these via environment variables instead, e.g.:
